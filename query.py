@@ -116,3 +116,16 @@ def query_proteins_by_aliases_batch(conn: sqlite3.Connection, gene_aliases: List
     
     return result
 
+#-----------------------------------------------------------------------------------------------------------------------
+
+def query_interactions_by_score(conn: sqlite3.Connection, min_score: int) -> List[Tuple]:
+    """
+    Queries the SQLite3 database for all protein-protein interactions with a score above a given threshold.
+    """
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT protein1_id, protein2_id, combined_score
+    FROM Interactions
+    WHERE combined_score >= ?
+    ''', (min_score,))
+    return cursor.fetchall()
