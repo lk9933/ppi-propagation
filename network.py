@@ -125,28 +125,3 @@ def augment_network(G: nx.Graph, mappings: Dict[str, float], continuous: bool = 
     
     print(f"Augmented {len(mappings)} proteins in the network.")
     return G
-
-#-----------------------------------------------------------------------------------------------------------------------
-
-def main():
-    # Set the file path
-    file_path = 'Data/Processed/alcohol_processed.tsv'
-
-    # Load the mapping file
-    mappings = pd.read_csv(file_path, sep='\t')
-
-    # Convert the mappings to a dictionary
-    mappings_dict = mappings.set_index('Protein')['Scaled_Robust_Sigmoid'].to_dict()
-
-    # Use proteins from mappings as seeds
-    seeds = list(mappings_dict.keys())
-    G = create_network_from_seeds(seeds, num_hops=2, min_score=900)
-
-    # Augment the network
-    G = augment_network(G, mappings_dict, continuous=False)
-
-    # Save the network to a file
-    nx.write_graphml(G, 'Data/Networks/alcohol_network_900.graphml')
-
-if __name__ == '__main__':
-    main()
