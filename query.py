@@ -129,3 +129,17 @@ def query_interactions_by_score(conn: sqlite3.Connection, min_score: int) -> Lis
     WHERE combined_score >= ?
     ''', (min_score,))
     return cursor.fetchall()
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def query_interactions_by_protein(conn: sqlite3.Connection, protein_id: str, min_score: int) -> List[Tuple]:
+    """
+    Queries the SQLite3 database for all protein-protein interactions associated with a given protein.
+    """
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT protein1_id, protein2_id, combined_score
+    FROM Interactions
+    WHERE protein1_id = ? AND combined_score >= ?
+    ''', (protein_id, min_score))
+    return cursor.fetchall()
