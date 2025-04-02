@@ -43,7 +43,6 @@ def heat_diffusion(G: nx.Graph, F0: np.ndarray, t: int) -> np.ndarray:
     """
     Returns the heat diffusion matrix after t iterations.
     """
-    print("Running heat diffusion algorithm...")
     # Get the degree row-normalized adjacency matrix
     W_D = adjacency_matrix(G)
 
@@ -52,7 +51,6 @@ def heat_diffusion(G: nx.Graph, F0: np.ndarray, t: int) -> np.ndarray:
     
     # Efficiently compute the matrix exponential
     F_t = expm_multiply(-W_D_hat * t, F0)
-    print("Heat diffusion completed.")
 
     return F_t
 
@@ -62,7 +60,6 @@ def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, 
     """
     Returns the random walk matrix after t iterations.
     """
-    print("Running random walk algorithm...")
     # Get the degree row-normalized adjacency matrix
     W_D = adjacency_matrix(G)
 
@@ -82,7 +79,6 @@ def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, 
 
         # Check for convergence
         if np.linalg.norm(F_i - F_i_prev) < epsilon:
-            print (f"Converged after {i} iterations.")
             break
     
     if i == max_iter - 1:
@@ -96,7 +92,6 @@ def run_propagation(G: nx.Graph, F0: np.ndarray, t: int, alpha: float) -> Dict[s
     """
     Runs the heat diffusion and random walk algorithms.
     """
-    print("Running network propagation algorithms...")
     F_hd = heat_diffusion(G, F0, t)
     F_rw = random_walk(G, F0, alpha)
 

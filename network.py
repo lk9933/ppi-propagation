@@ -1,5 +1,5 @@
 """
-Module handling the creation and augmention of PPI networks.
+Module handling the creation of PPI networks.
 
 Requires the following files:
 Data/Processed/*.tsv - Preprocessed mapping files of proteins, p-values, genes, and SNPs.
@@ -100,28 +100,4 @@ def create_network_from_seeds(seeds: List[str], num_hops: int = 3, min_score: in
     conn.close()
     
     print(f"Created network with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-    return G
-
-#-----------------------------------------------------------------------------------------------------------------------
-
-def augment_network(G: nx.Graph, mappings: Dict[str, float], continuous: bool = False) -> nx.Graph:
-    """
-    Augments a network with nodes and edges based on mappings.
-    """
-    if not continuous:
-        # Assign a score of 1 to all proteins in the mapping
-        for protein in mappings:
-            if protein not in G.nodes:
-                G.add_node(protein, score=1)
-            else:
-                G.nodes[protein]['score'] = 1
-    else:
-        # Otherwise, assign the scaled robust sigmoid value to each protein
-        for protein, score in mappings.items():
-            if protein not in G.nodes:
-                G.add_node(protein, score=score)
-            else:
-                G.nodes[protein]['score'] = score
-    
-    print(f"Augmented {len(mappings)} proteins in the network.")
     return G
