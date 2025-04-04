@@ -10,6 +10,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 import scipy.sparse as sp
+from network import create_network
 from scipy.sparse.linalg import expm_multiply
 from typing import Dict
 
@@ -63,11 +64,14 @@ def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, 
     # Get the degree row-normalized adjacency matrix
     W_D = adjacency_matrix(G)
 
+    # Convert F0 to a sparse array
+    F0_sparse = sp.csr_matrix(F0.reshape(-1, 1))
+
     # Initialize vector of scores
-    F_i = F0.copy()
+    F_i = F0_sparse.copy()
 
     # Precompute restart vector
-    restart = (1 - alpha) * F0
+    restart = (1 - alpha) * F0_sparse
 
     # Iterate until convergence
     for i in range(max_iter):
@@ -78,13 +82,14 @@ def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, 
         F_i = restart + alpha * (W_D @ F_i_prev)
 
         # Check for convergence
-        if np.linalg.norm(F_i - F_i_prev) < epsilon:
+        diff = F_i - F_i_prev
+        if sp.linalg.norm(diff) < epsilon:
             break
     
     if i == max_iter - 1:
         print("Warning: Max iterations reached without convergence.")
 
-    return F_i
+    return F_i.toarray().flatten()
 
 #-----------------------------------------------------------------------------------------------------------------------
 
@@ -101,7 +106,7 @@ def run_propagation(G: nx.Graph, F0: np.ndarray, t: int, alpha: float) -> Dict[s
 
 def main():
     # Load the network
-    G = nx.read_graphml('Data/Networks/alcohol_network_900.graphml')
+    G = create_network(min_score=700)
 
     # Load the mappings
     mappings = pd.read_csv('Data/Processed/alcohol_processed.tsv', sep='\t', index_col='Protein')
@@ -114,7 +119,7 @@ def main():
             F0[i] = mappings[node]
 
     # Run the network propagation algorithms
-    results = run_propagation(G, F0, t=3, alpha=0.7)
+    results = run_propagation(G, F0, t=5, alpha=0.8)
     
     # Create a DataFrame with proteins and scores from both algorithms
     df = pd.DataFrame({'Protein': list(G.nodes)})
@@ -134,7 +139,7 @@ def main():
     df.sort_values(by='Avg_Rank', ascending=True, inplace=True)
     
     # Save results to TSV file
-    output_path = 'Data/Results/propagation_results.tsv'
+    output_path = 'Results/propagation_results.tsv'
     df.to_csv(output_path, sep='\t', index=False)
     print(f"Results saved to {output_path}")
 

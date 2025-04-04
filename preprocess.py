@@ -39,10 +39,13 @@ def preprocess_mappings(file_path: str) -> None:
     # Load the mapping file
     mappings = pd.read_csv(file_path, sep='\t')
     
-    # Extract the base name from the file path
+    # Extract the base name from the file path  
     file_name = os.path.basename(file_path)
     base_name = file_name.replace('_mappings.tsv', '')
     
+    # If p-value 0, replace with 1e-300
+    mappings['P-Value'] = mappings['P-Value'].replace(0, 1e-300)
+
     # Log-transform the p-values
     mappings['Log_P-Value'] = mappings['P-Value'].apply(log_transform)
 
@@ -60,11 +63,9 @@ def preprocess_mappings(file_path: str) -> None:
     max_val = mappings['Robust_Sigmoid'].max()
     mappings['Scaled_Robust_Sigmoid'] = (mappings['Robust_Sigmoid'] - min_val) / (max_val - min_val)
 
-    # Drop unnecessary columns
-    mappings.drop(columns=['P-Value', 'Log_P-Value', 'Robust_Sigmoid'], inplace=True)
-
     # Arrange columns in a specific order
-    mappings = mappings[['Protein', 'Scaled_Robust_Sigmoid', 'Gene', 'SNP']]
+    mappings = mappings[['Protein', 'Scaled_Robust_Sigmoid', 'Robust_Sigmoid', 
+                         'Log_P-Value', 'P-Value', 'Gene', 'SNP']]
 
     # Sort by score in descending order
     mappings.sort_values(by='Scaled_Robust_Sigmoid', ascending=False, inplace=True)

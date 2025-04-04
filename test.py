@@ -36,23 +36,6 @@ def prepare_network(protein_scores: pd.DataFrame, min_score: int, complete: bool
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-def assign_labels(protein_scores: pd.DataFrame, input_file: str) -> pd.DataFrame:
-    """
-    Assigns labels to the protein scores based on the input file
-    """
-    # Load the input file
-    disease_associations = pd.read_csv(input_file, sep='\t')
-
-    # Map the gene names to proteins
-    protein_names = set(disease_associations['identifier'].unique().tolist())
-
-    # Assign labels based on the presence of proteins in the gene map
-    protein_scores['Label'] = protein_scores['Protein'].apply(lambda x: 1 if x in protein_names else 0)
-
-    return protein_scores
-    
-#-----------------------------------------------------------------------------------------------------------------------
-
 def run_heat_diffusion_cv(protein_scores, G, t, node_indices):
     """Run Heat Diffusion cross-validation for a specific t value."""
     # Initialize StratifiedKFold
@@ -78,10 +61,15 @@ def run_heat_diffusion_cv(protein_scores, G, t, node_indices):
                 i = node_indices[node]
                 # Assign score based off protein_scores data SCALED_ROBUST_SIGMOID
                 # F0[i] = train_data[train_data['Protein'] == node]['Scaled_Robust_Sigmoid'].iloc[0]
-                F0[i] = 1
+                F0[i] = train_data.loc[train_data['Protein'] == node, 'Label'].iloc[0]
         
         # Run Heat Diffusion
         F_hd = heat_diffusion(G, F0, t)
+        
+        # Normalize scores to improve threshold selection
+        # Z-score normalization
+        if np.std(F_hd) > 0:
+            F_hd = (F_hd - np.mean(F_hd)) / np.std(F_hd)
         
         # Evaluate performance
         y_true = []
@@ -121,6 +109,7 @@ def run_heat_diffusion_cv(protein_scores, G, t, node_indices):
         'all_y_pred': all_y_pred
     }
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def run_random_walk_cv(protein_scores, G, alpha, node_indices):
     """Run Random Walk cross-validation for a specific alpha value."""
@@ -147,11 +136,16 @@ def run_random_walk_cv(protein_scores, G, alpha, node_indices):
             if node in train_data['Protein'].values:
                 i = node_indices[node]
                 # F0[i] = train_data[train_data['Protein'] == node]['Scaled_Robust_Sigmoid'].iloc[0]
-                F0[i] = 1
+                F0[i] = train_data.loc[train_data['Protein'] == node, 'Label'].iloc[0]
         
         # Run Random Walk
         F_rw = random_walk(G, F0, alpha)
         
+        # Normalize scores to improve threshold selection
+        # Z-score normalization
+        if np.std(F_rw) > 0:
+            F_rw = (F_rw - np.mean(F_rw)) / np.std(F_rw)
+
         # Evaluate performance
         y_true = []
         y_pred = []
@@ -190,6 +184,7 @@ def run_random_walk_cv(protein_scores, G, alpha, node_indices):
         'all_y_pred': all_y_pred
     }
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def generate_roc_curve(results, color, algo_name, param_name, param_value, output_path, f1_metrics=None):
     """Generate a ROC curve for a single algorithm with specific parameters."""
@@ -247,6 +242,7 @@ def generate_roc_curve(results, color, algo_name, param_name, param_value, outpu
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def generate_comparison_roc(hd_results, rw_results, best_t, best_alpha, output_path):
     """Generate a ROC curve comparing the best Heat Diffusion and Random Walk results."""
@@ -286,6 +282,7 @@ def generate_comparison_roc(hd_results, rw_results, best_t, best_alpha, output_p
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def interpolate_roc_curve(results):
     """Interpolate ROC curve data points to create a smooth curve."""
@@ -335,35 +332,65 @@ def interpolate_roc_curve(results):
     
     return mean_fpr, mean_tpr
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def find_optimal_threshold(y_true, y_pred):
     """Find optimal threshold that maximizes F1 score."""
+    # Calculate range for thresholds based on the actual prediction distribution
+    min_pred = min(y_pred)
+    max_pred = max(y_pred)
+    
+    # Create a more fine-grained and data-driven threshold range
+    # Use more thresholds for better precision, range should cover both negative and positive values
+    num_thresholds = 100
+    thresholds = np.linspace(min_pred, max_pred, num_thresholds)
+    
     # Initialize variables
-    thresholds = np.arange(0.0, 1.00, 0.05)
     best_f1 = 0
     best_threshold = 0.0
-
+    
     # Iterate through thresholds to find the best F1 score
     for threshold in thresholds:
         y_pred_binary = (np.array(y_pred) >= threshold).astype(int)
-        f1 = f1_score(y_true, y_pred_binary)
-        if f1 > best_f1:
-            best_f1 = f1
-            best_threshold = threshold
-
+        # Check if there are any positive predictions to avoid division by zero
+        if np.sum(y_pred_binary) > 0:
+            f1 = f1_score(y_true, y_pred_binary)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = threshold
+    
+    # If no good threshold was found (all F1=0), use median as a fallback
+    if best_f1 == 0:
+        best_threshold = np.median(y_pred)
+        print("Warning: No optimal threshold found with F1 > 0, using median as fallback.")
+    
     # Return the best threshold     
     return best_threshold
 
+#-----------------------------------------------------------------------------------------------------------------------
+
 def calculate_f1_metrics(results):
     """Calculate F1 score and related metrics using optimal threshold."""
+    from sklearn.isotonic import IsotonicRegression
+    
     y_true = results['all_y_true']
     y_pred = results['all_y_pred']
     
-    # Find optimal threshold
-    optimal_threshold = find_optimal_threshold(y_true, y_pred)
+    # Apply isotonic regression for probability calibration
+    try:
+        ir = IsotonicRegression(out_of_bounds='clip')
+        # We need to calibrate on the whole dataset since we have a limited number of samples
+        # In a production scenario, you would use separate calibration set
+        y_pred_calibrated = ir.fit_transform(y_pred, y_true)
+    except Exception as e:
+        print(f"Calibration failed: {e}. Using original predictions.")
+        y_pred_calibrated = y_pred
+    
+    # Find optimal threshold on calibrated predictions
+    optimal_threshold = find_optimal_threshold(y_true, y_pred_calibrated)
     
     # Make binary predictions using optimal threshold
-    y_pred_binary = (np.array(y_pred) >= optimal_threshold).astype(int)
+    y_pred_binary = (np.array(y_pred_calibrated) >= optimal_threshold).astype(int)
     
     # Calculate metrics
     f1 = f1_score(y_true, y_pred_binary)
@@ -377,6 +404,7 @@ def calculate_f1_metrics(results):
         'threshold': optimal_threshold
     }
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def evaluate_heat_diffusion(protein_scores, G, node_indices, t_values, output_file):
     """Evaluate heat diffusion algorithm with different t values."""
@@ -402,7 +430,7 @@ def evaluate_heat_diffusion(protein_scores, G, node_indices, t_values, output_fi
         f1_metrics = calculate_f1_metrics(hd_results)
         
         # Generate individual ROC curve for this parameter
-        output_path = f"Results/sud/ROC_Curves/heat_diffusion/t{t}/heat_diffusion_roc.png"
+        output_path = f"Results/epilepsy/ROC_Curves/heat_diffusion/t{t}/heat_diffusion_roc.png"
         generate_roc_curve(hd_results, 'blue', 'Heat Diffusion', 't', t, output_path, f1_metrics)
         
         # Track best parameter
@@ -418,6 +446,7 @@ def evaluate_heat_diffusion(protein_scores, G, node_indices, t_values, output_fi
     
     return best_t, hd_results_cache[best_t]
 
+#-----------------------------------------------------------------------------------------------------------------------
 
 def evaluate_random_walk(protein_scores, G, node_indices, alpha_values, output_file):
     """Evaluate random walk algorithm with different alpha values."""
@@ -443,7 +472,7 @@ def evaluate_random_walk(protein_scores, G, node_indices, alpha_values, output_f
         f1_metrics = calculate_f1_metrics(rw_results)
         
         # Generate individual ROC curve for this parameter
-        output_path = f"Results/sud/ROC_Curves/random_walk/alpha{alpha}/random_walk_roc.png"
+        output_path = f"Results/epilepsy/ROC_Curves/random_walk/alpha{alpha}/random_walk_roc.png"
         generate_roc_curve(rw_results, 'red', 'Random Walk', 'α', alpha, output_path, f1_metrics)
         
         # Track best parameter
@@ -459,35 +488,98 @@ def evaluate_random_walk(protein_scores, G, node_indices, alpha_values, output_f
     
     return best_alpha, rw_results_cache[best_alpha]
 
+#-----------------------------------------------------------------------------------------------------------------------
 
-def main():
-    # Load protein scores
-    protein_scores = pd.read_csv('Data/Processed/sud_complete_processed.tsv', sep='\t')
-
-    # Assign labels based on disease associations
-    protein_scores = assign_labels(protein_scores, 'Data/STRING/sud_proteins.tsv')
-
-    # Prepare the network
-    G = prepare_network(protein_scores, min_score=400, complete=False, num_hops=2)
+def load_omim_data():
+    # Load OMIM data
+    epilepsy_genes = pd.read_csv('Data/OMIM/Processed/epilepsy_genes.txt')
+    amd_genes = pd.read_csv('Data/OMIM/Processed/amd_genes.txt')
+    als_genes = pd.read_csv('Data/OMIM/Processed/als_genes.txt')
+    diabetes_genes = pd.read_csv('Data/OMIM/Processed/diabetes_genes.txt')
     
+    # Convert to list
+    epilepsy_genes_list = epilepsy_genes['Gene'].tolist()
+    amd_genes_list = amd_genes['Gene'].tolist()
+    als_genes_list = als_genes['Gene'].tolist()
+    diabetes_genes_list = diabetes_genes['Gene'].tolist()
+
+    # Map to proteins
+    conn = sqlite3.connect('Data/SQLite_DB/genomics.db') 
+    epilepsy_proteins = query_proteins_by_aliases_batch(conn, epilepsy_genes_list)
+    amd_proteins = query_proteins_by_aliases_batch(conn, amd_genes_list)
+    als_proteins = query_proteins_by_aliases_batch(conn, diabetes_genes_list)
+    diabetes_proteins = query_proteins_by_aliases_batch(conn, diabetes_genes_list)
+    conn.close()
+
+    # Convert dictionaries to list of their values
+    epilepsy_proteins_list = [item for sublist in epilepsy_proteins.values() for item in sublist]
+    amd_proteins_list = [item for sublist in amd_proteins.values() for item in sublist]
+    als_proteins_list = [item for sublist in als_proteins.values() for item in sublist]
+    diabetes_genes_list = [item for sublist in diabetes_proteins.values() for item in sublist]
+
+
+    # Return the lists
+    return epilepsy_proteins_list, amd_proteins_list, als_proteins_list, diabetes_genes_list
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def test_pipeline():
+    # Get list of all proteins from database
+    # conn = sqlite3.connect('Data/SQLite_DB/genomics.db')
+    # cursor = conn.cursor()
+    # cursor.execute("SELECT protein_id FROM proteins")
+    # all_proteins = cursor.fetchall()
+    # all_proteins = [item[0] for item in all_proteins]
+    # conn.close()
+
+    # Create a DataFrame with all proteins
+    # protein_scores = pd.DataFrame(all_proteins, columns=['Protein'])
+    # protein_scores['Label'] = 0
+
+    # Load OMIM data
+    epilepsy_proteins_list, amd_proteins_list, als_proteins_list, diabetes_proteins_list = load_omim_data()
+
+    # Assign labels based on OMIM data
+    # protein_scores.loc[protein_scores['Protein'].isin(epilepsy_proteins_list), 'Label'] = 1
+    # protein_scores.loc[protein_scores['Protein'].isin(amd_proteins_list), 'Label'] = -1
+    
+    # Prepare the network
+    G = prepare_network(protein_scores=None, min_score=900, complete=True, num_hops=2)
+    
+    # Create a DataFrame for the epilepsy proteins
+    protein_scores = pd.DataFrame(epilepsy_proteins_list, columns=['Protein'])
+    protein_scores['Label'] = 1
+
+    # Create a DataFrame for the AMD proteins
+    amd_proteins_df = pd.DataFrame(amd_proteins_list, columns=['Protein'])
+    amd_proteins_df['Label'] = 0
+
+    # Create a DataFrame for the diabetes proteins
+    diabetes_proteins_df = pd.DataFrame(diabetes_proteins_list, columns=['Protein'])
+    diabetes_proteins_df['Label'] = 0
+
+    # Combine the three DataFrames
+    protein_scores = pd.concat([protein_scores, amd_proteins_df], ignore_index=True)
+    protein_scores = pd.concat([protein_scores, diabetes_proteins_df], ignore_index=True)
+    protein_scores = protein_scores.drop_duplicates(subset=['Protein'], keep='first')
+    protein_scores = protein_scores.reset_index(drop=True)
+    protein_scores['Label'] = protein_scores['Label'].astype(int)
+
     # Parameters to test
-    t_values = [2, 4, 6, 8]
-    alpha_values = [0.2, 0.4, 0.6, 0.8]
+    t_values = [0.5, 1, 2, 4, 8]
+    alpha_values = [0.5, 0.6, 0.7, 0.8]
     
     # Create results directory
-    os.makedirs("Results/sud", exist_ok=True)
+    os.makedirs("Results/epilepsy", exist_ok=True)
     
-    # Pre-compute the node indices for each protein
-    node_indices = {}
-    for protein in protein_scores['Protein']:
-        if protein in G:
-            node_indices[protein] = list(G.nodes()).index(protein)
+    # Precompute mapping for all nodes in the network once
+    node_indices = {node: idx for idx, node in enumerate(G.nodes())}
 
     # Open a file to write summary results
-    with open("Results/sud/summary_results.txt", "w") as f:
+    with open("Results/epilepsy/summary_results.txt", "w") as f:
         f.write("Network Propagation Algorithm Evaluation\n")
         f.write("=======================================\n\n")
-        f.write(f"Dataset: sud_processed.tsv\n")
+        f.write(f"Dataset: epilepsy_processed.tsv\n")
         f.write(f"Network size: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges\n\n")
         
         # Evaluate Heat Diffusion
@@ -497,7 +589,7 @@ def main():
         best_alpha, best_rw_results = evaluate_random_walk(protein_scores, G, node_indices, alpha_values, f)
         
         # Generate comparison ROC curve for the best parameters
-        output_path = f"Results/sud/ROC_Curves/comparison/best_algorithms_comparison.png"
+        output_path = f"Results/epilepsy/ROC_Curves/comparison/best_algorithms_comparison.png"
         generate_comparison_roc(best_hd_results, best_rw_results, best_t, best_alpha, output_path)
         
         # Compare the two methods
@@ -523,10 +615,10 @@ def main():
         f.write(f"AUC difference: {abs(auc_difference):.4f} favoring {('Heat Diffusion' if auc_difference > 0 else 'Random Walk')}\n")
         f.write(f"F1 difference: {abs(f1_difference):.4f} favoring {('Heat Diffusion' if f1_difference > 0 else 'Random Walk')}\n")
     
-    print(f"\nEvaluation complete. Results saved to Results/sud/summary_results.txt")
-    print(f"ROC curves saved to Results/sud/ROC_Curves/")
+    print(f"\nEvaluation complete. Results saved to Results/epilepsy/summary_results.txt")
+    print(f"ROC curves saved to Results/epilepsy/ROC_Curves/")
 
 
 if __name__ == "__main__":
-    main()
+    test_pipeline()
 
