@@ -16,24 +16,24 @@ from typing import Dict
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-def adjacency_matrix(G: nx.Graph) -> np.ndarray:
+def adjacency_matrix(G: nx.Graph) -> sp.spmatrix:
     """
-    Returns the degree row-normalized adjacency matrix of a network.
+    Returns the degree row-normalized adjacency matrix of a network as a sparse matrix.
     """
-    # Get the adjacency matrix
-    A = nx.to_scipy_sparse_array(G)
-
-    # Get the degree matrix
+    # Get the adjacency matrix as a sparse CSR matrix
+    A = nx.to_scipy_sparse_array(G, format='csr')
+    
+    # Compute node degrees using a sparse operation
     degrees = np.array(A.sum(axis=1)).flatten()
     
-    # Create inverse degree matrix (avoiding division by zero)
+    # Calculate inverse degrees, avoiding division by zero
     with np.errstate(divide='ignore'):
         inv_deg = np.where(degrees > 0, 1.0 / degrees, 0)
     
-    # Create diagonal matrix with inverse degrees
+    # Create a diagonal sparse matrix from inverse degrees
     D_inv = sp.diags(inv_deg)
     
-    # Compute the normalized adjacency matrix
+    # Compute the row-normalized adjacency matrix using sparse matrix multiplication
     W_D = D_inv @ A
     
     return W_D
@@ -47,13 +47,16 @@ def heat_diffusion(G: nx.Graph, F0: np.ndarray, t: int) -> np.ndarray:
     # Get the degree row-normalized adjacency matrix
     W_D = adjacency_matrix(G)
 
+    # Convert F0 to a sparse array
+    F0_sparse = sp.csr_matrix(F0.reshape(-1, 1))
+
     # Add the identity matrix
     W_D_hat = -W_D + sp.eye(W_D.shape[0])
     
     # Efficiently compute the matrix exponential
-    F_t = expm_multiply(-W_D_hat * t, F0)
+    F_t = expm_multiply(-W_D_hat * t, F0_sparse)
 
-    return F_t
+    return F_t.toarray().flatten()
 
 #-----------------------------------------------------------------------------------------------------------------------
 
