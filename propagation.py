@@ -16,7 +16,7 @@ from typing import Dict
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-def adjacency_matrix(G: nx.Graph) -> sp.spmatrix:
+def row_normalized_adjacency_matrix(G: nx.Graph) -> sp.spmatrix:
     """
     Returns the degree row-normalized adjacency matrix of a network as a sparse matrix.
     """
@@ -40,55 +40,70 @@ def adjacency_matrix(G: nx.Graph) -> sp.spmatrix:
 
 #-----------------------------------------------------------------------------------------------------------------------
 
+def normalized_laplacian_matrix(G: nx.Graph) -> sp.spmatrix:
+    """
+    Returns the normalized Laplacian matrix of a network as a sparse matrix.
+    """
+    # Get the adjacency matrix as a sparse CSR matrix
+    A = nx.to_scipy_sparse_array(G, format='csr')
+    
+    # Compute node degrees using a sparse operation
+    degrees = np.array(A.sum(axis=1)).flatten()
+    
+    # Calculate inverse square root of degrees, avoiding division by zero
+    with np.errstate(divide='ignore'):
+        inv_sqrt_deg = np.where(degrees > 0, 1.0 / np.sqrt(degrees), 0)
+    
+    # Create a diagonal degree sparse matrix
+    D = sp.diags(degrees)
+
+    # Create a diagonal sparse matrix from inverse square root of degrees
+    D_inv_sqrt = sp.diags(inv_sqrt_deg)
+
+    # Compute the Laplacian matrix
+    W_L = D - A
+    
+    # Compute the normalized Laplacian matrix using sparse matrix multiplication
+    W_L_hat = D_inv_sqrt @ W_L @ D_inv_sqrt
+    
+    return W_L_hat
+
+#-----------------------------------------------------------------------------------------------------------------------
+
 def heat_diffusion(G: nx.Graph, F0: np.ndarray, t: int) -> np.ndarray:
     """
-    Returns the heat diffusion matrix after t iterations.
+    Returns the heat diffusion scores after t iterations using a precomputed row-normalized 
+    adjacency matrix (W_D) if provided.
     """
-    # Get the degree row-normalized adjacency matrix
-    W_D = adjacency_matrix(G)
-
-    # Convert F0 to a sparse array
-    F0_sparse = sp.csr_matrix(F0.reshape(-1, 1))
-
-    # Add the identity matrix
-    W_D_hat = -W_D + sp.eye(W_D.shape[0])
+    W_D = row_normalized_adjacency_matrix(G)
     
-    # Efficiently compute the matrix exponential
+    F0_sparse = sp.csr_matrix(F0.reshape(-1, 1))
+    W_D_hat = -W_D + sp.eye(W_D.shape[0])
     F_t = expm_multiply(-W_D_hat * t, F0_sparse)
-
+    
     return F_t.toarray().flatten()
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, epsilon: float = 1e-6) -> np.ndarray:
+def random_walk(G: nx.Graph, F0: np.ndarray, alpha: float, max_iter: int = 100, 
+                epsilon: float = 1e-6) -> np.ndarray:
     """
-    Returns the random walk matrix after t iterations.
+    Returns the random walk scores after iterative updates. Optionally reuses a precomputed 
+    row-normalized adjacency matrix (W_D).
     """
-    # Get the degree row-normalized adjacency matrix
-    W_D = adjacency_matrix(G)
+    W_D = row_normalized_adjacency_matrix(G)
 
-    # Convert F0 to a sparse array
     F0_sparse = sp.csr_matrix(F0.reshape(-1, 1))
-
-    # Initialize vector of scores
     F_i = F0_sparse.copy()
-
-    # Precompute restart vector
     restart = (1 - alpha) * F0_sparse
 
-    # Iterate until convergence
     for i in range(max_iter):
-        # Store the previous score vector
         F_i_prev = F_i.copy()
-
-        # Update scores using the random walk formula
         F_i = restart + alpha * (W_D @ F_i_prev)
-
-        # Check for convergence
         diff = F_i - F_i_prev
         if sp.linalg.norm(diff) < epsilon:
             break
-    
+
     if i == max_iter - 1:
         print("Warning: Max iterations reached without convergence.")
 
