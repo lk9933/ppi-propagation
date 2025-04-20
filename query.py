@@ -96,24 +96,23 @@ def query_protein_by_alias(conn: sqlite3.Connection, alias: str) -> List[Tuple]:
 
 def query_proteins_by_aliases_batch(conn: sqlite3.Connection, gene_aliases: List[str]) -> Dict[str, List[str]]:
     """
-    Query proteins by multiple gene aliases at once.
+    Query proteins by multiple gene aliases at once, in chunks to avoid
+    hitting SQLite's variable‐limit.
     """
-    result = {}
-    placeholders = ','.join(['?' for _ in gene_aliases])
-    query = f"""
-    SELECT alias, protein_id 
-    FROM ProteinAliases 
-    WHERE alias IN ({placeholders})
-    """
+    result: Dict[str, List[str]] = {}
     cursor = conn.cursor()
-    cursor.execute(query, gene_aliases)
-    rows = cursor.fetchall()
-    
-    for alias, protein_id in rows:
-        if alias not in result:
-            result[alias] = []
-        result[alias].append(protein_id)
-    
+    chunk_size = 25  # adjust if needed
+    for i in range(0, len(gene_aliases), chunk_size):
+        chunk = gene_aliases[i : i + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        query = f"""
+        SELECT alias, protein_id
+        FROM ProteinAliases
+        WHERE alias IN ({placeholders})
+        """
+        cursor.execute(query, chunk)
+        for alias, protein_id in cursor.fetchall():
+            result.setdefault(alias, []).append(protein_id)
     return result
 
 #-----------------------------------------------------------------------------------------------------------------------

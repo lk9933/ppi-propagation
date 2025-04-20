@@ -1,5 +1,7 @@
 """
 Module for visualizing cross-validation results of network propagation algorithms.
+
+Author: Luke Krongard
 """
 
 #-----------------------------------------------------------------------------------------------------------------------
@@ -200,3 +202,63 @@ def interpolate_roc_curve(results):
         mean_tpr = smoothed_tpr
     
     return mean_fpr, mean_tpr
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def generate_disease_roc_curve(results, disease, algo_name, param_name, mean_param, mean_auroc, output_path, color):
+    """
+    Generate a ROC curve for an algorithm with:
+      - Faint ROC curves for each fold.
+      - A bold average ROC curve.
+      - A title that incorporates the disease name.
+      - A text annotation on the plot showing the mean outer AUROC and the mode hyperparameter.
+      
+    Parameters:
+      results: dict with 'all_fpr' and 'all_tpr' (lists holding each fold's FPR and TPR).
+      disease: str, name of the disease (e.g., "epilepsy").
+      algo_name: str, algorithm name (e.g., "Heat Diffusion" or "Random Walk").
+      param_name: str, name of the hyperparameter (e.g., "t" or "α").
+      mode_param: The mode hyperparameter value from the CV.
+      mean_auroc: float, the mean outer AUROC from the CV folds.
+      output_path: str, file path for saving the ROC curve image.
+      color: str, color to be used for the curves.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plt.figure(figsize=(10, 8))
+    
+    # Plot each fold's ROC curve with faint lines.
+    for i in range(len(results['all_fpr'])):
+        plt.plot(results['all_fpr'][i], results['all_tpr'][i], color=color, lw=0.8, alpha=0.3)
+    
+    # Compute a smooth average ROC curve.
+    mean_fpr = np.linspace(0, 1, 2000)
+    mean_tpr = np.zeros_like(mean_fpr)
+    for i in range(len(results['all_fpr'])):
+        fold_fpr = np.array(results['all_fpr'][i])
+        fold_tpr = np.array(results['all_tpr'][i])
+        interp_tpr = np.interp(mean_fpr, fold_fpr, fold_tpr)
+        mean_tpr += interp_tpr
+    mean_tpr /= len(results['all_fpr'])
+    
+    # Plot the average ROC curve as a bold line.
+    plt.plot(mean_fpr, mean_tpr, color=color, lw=3, 
+             label=f'{algo_name} (Mean AUROC = {mean_auroc:.3f}, Mean {param_name} = {mean_param})', antialiased=True)
+    
+    # Plot the diagonal reference line.
+    plt.plot([0, 1], [0, 1], 'k--', lw=2)
+    
+    # If name contains underscores, replace them with spaces.
+    disease = disease.replace('_', ' ')
+    # Ensure first letter of each word is capitalized.
+    disease = ' '.join(word.capitalize() for word in disease.split())
+    plt.title(f'{algo_name} ROC Curve for {disease}', fontsize=16)
+    plt.xlabel('False Positive Rate', fontsize=14)
+    plt.ylabel('True Positive Rate', fontsize=14)
+    plt.legend(loc="lower right", fontsize=11)
+    plt.grid(alpha=0.4)
+    
+    # Ensure the output directory exists and save the plot.
+    plt.savefig(output_path, dpi=300)
+    plt.close()

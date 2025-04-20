@@ -37,9 +37,8 @@ def create_network(min_score: int = 400) -> nx.Graph:
     # Add nodes and edges to the graph
     for interaction in interactions:
         protein1, protein2, weight = interaction
-        G.add_edge(protein1, protein2, weight=weight)
+        G.add_edge(protein1, protein2, weight=(weight/1000))
     
-    print(f"Created network with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
     return G
 
 #-----------------------------------------------------------------------------------------------------------------------
@@ -101,3 +100,12 @@ def create_network_from_seeds(seeds: List[str], num_hops: int = 3, min_score: in
     
     print(f"Created network with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
     return G
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def main():
+    G = create_network(min_score=400)
+    print(f"Created network with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+
+if __name__ == "__main__":
+    main()
