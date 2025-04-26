@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 def load_all_results(results_dir="Results"):
     """
@@ -37,15 +38,15 @@ def load_fold_jsons(results_dir="Results"):
     for file in os.listdir(results_dir):
         if file.endswith("_folds.json"):
             path = os.path.join(results_dir, file)
-            # Example file: "epilepsy_HeatDiffusion_folds.json"
             with open(path, "r") as f:
                 data = json.load(f)
             # Parse the disease name & algorithm
             base = file.replace("_folds.json", "")
-            # e.g., "epilepsy_HeatDiffusion"
             parts = base.split("_")
-            # The last part is the algorithm, everything else is disease
-            algo = parts[-1]
+            # normalize algorithm names to match summary labels
+            algo_raw = parts[-1]
+            name_map = {"HeatDiffusion": "Heat Diffusion", "RandomWalk": "Random Walk"}
+            algo = name_map.get(algo_raw, algo_raw)
             disease = "_".join(parts[:-1])
             fold_data[(disease, algo)] = data
     return fold_data
@@ -96,103 +97,80 @@ def create_summary_table(results_df):
     )
     return styled
 
-def create_performance_comparison(results_df):
-    """
-    Draw box plots and bar charts for performance (AUROC) across folds.
-    """
-    plt.figure(figsize=(10, 5))
-    sns.boxplot(data=results_df, x="Algorithm", y="Test_AUROC")
-    plt.title("Performance Distribution (AUROC) by Algorithm")
-    plt.tight_layout()
-    plt.show()
+def plot_roc_comparison(fold_data,
+                        algorithms=None,
+                        fpr_grid=None):
+    import matplotlib.pyplot as plt
 
-    # Bar chart for overall scores
-    overall = results_df[results_df["Fold"] == "Overall"]
-    plt.figure(figsize=(8, 5))
-    sns.barplot(data=overall, x="Algorithm", y="Test_AUROC", capsize=.2)
-    plt.title("Overall AUROC Scores")
-    plt.tight_layout()
-    plt.show()
+    # determine available algorithm names in fold_data
+    available = sorted({a for (_, a) in fold_data.keys()})
+    # filter or derive algorithms list
+    if algorithms:
+        selected = [algo for algo in algorithms if algo in available]
+        missing = set(algorithms) - set(selected)
+        if missing:
+            print(f"Warning: requested algorithms {missing} not found in fold_data; available: {available}")
+        algorithms = selected
+    else:
+        algorithms = available
 
-def create_hyperparameter_analysis(results_df):
-    """
-    Plot AUROC vs. parameter values (Heat Diffusion t, Random Walk α) to show sensitivity.
-    Optionally, create a heatmap if multiple parameter combos exist in the data.
-    """
-    per_fold = results_df[results_df["Fold"] != "Overall"]
-    if per_fold.empty:
-        print("No per-fold data found for hyperparameter analysis.")
-        return
+    if fpr_grid is None:
+        fpr_grid = np.linspace(0, 1, 200)
+    # derive algorithm list if not provided based on fold_data keys
+    # ensure final algorithm list
+    algorithms = sorted(algorithms)
 
-    plt.figure(figsize=(8, 5))
-    for algo in per_fold["Algorithm"].unique():
-        subset = per_fold[per_fold["Algorithm"] == algo].sort_values("BestParameter")
-        plt.plot(subset["BestParameter"], subset["Test_AUROC"], marker="o", label=algo)
-    plt.legend()
-    plt.title("AUROC vs. Parameter Values")
-    plt.xlabel("Parameter (t or α)")
-    plt.ylabel("AUROC")
-    plt.tight_layout()
-    plt.show()
+    # assign one distinct color per algorithm
+    palette = plt.get_cmap("tab10")
+    colors = {algo: palette(i) for i, algo in enumerate(algorithms)}
 
-    # Example heatmap (requires multiple parameter combos)
-    # pivot_heat = per_fold.pivot_table(
-    #     index="BestParameter", columns="Algorithm", values="Test_AUROC", aggfunc="mean"
-    # )
-    # sns.heatmap(pivot_heat, annot=True, cmap="YlOrBr")
-    # plt.title("Parameter Performance Heat Map")
-    # plt.tight_layout()
-    # plt.show()
+    # create figure similar to visualize.py
+    plt.figure(figsize=(10, 8))
 
-def create_roc_visualization(fold_data):
-    """
-    Overlaid ROC curves for each disease, with each algorithm in a different color.
-    Uses data from the JSON fold files. Each fold is shown as a thin line, and the average as thick.
-    """
-    for (disease, algo), data in fold_data.items():
-        if not data.get("all_fpr") or not data.get("all_tpr"):
+    for algo in algorithms:
+        # collect interpolated TPRs and per-disease AUCs for this algo
+        all_tprs = []
+        aucs = []
+        for (disease, a), data in fold_data.items():
+            if a != algo:
+                continue
+            # collect mean AUC per disease
+            if "mean_outer_auc" in data:
+                aucs.append(data["mean_outer_auc"])
+            # plot each fold's curve using JSON all_fpr/all_tpr
+            for fpr_vals, tpr_vals in zip(data.get("all_fpr", []), data.get("all_tpr", [])):
+                fpr = np.array(fpr_vals)
+                tpr = np.array(tpr_vals)
+                # thin transparent lines for individual folds
+                plt.plot(fpr, tpr, color=colors[algo], lw=0.8, alpha=0.15)
+                interp_tpr = np.interp(fpr_grid, fpr, tpr)
+                all_tprs.append(interp_tpr)
+
+        if not all_tprs:
             continue
-        plt.figure(figsize=(8, 6))
-        # Plot each fold
-        for fpr, tpr in zip(data["all_fpr"], data["all_tpr"]):
-            plt.plot(fpr, tpr, lw=0.8, alpha=0.2, label=None, color="blue")
 
-        # Plot average curve
-        mean_auc = data.get("mean_outer_auc", 0.0)
-        # Simple average interpolation
-        mean_fpr = np.linspace(0, 1, 200)
-        sum_tpr = np.zeros_like(mean_fpr)
-        for fpr, tpr in zip(data["all_fpr"], data["all_tpr"]):
-            interp_tpr = np.interp(mean_fpr, fpr, tpr)
-            sum_tpr += interp_tpr
-        mean_tpr = sum_tpr / len(data["all_fpr"])
-        label_str = f"{algo} (Mean AUROC={mean_auc:.3f})"
-        plt.plot(mean_fpr, mean_tpr, lw=2, label=label_str, color="blue")
+        # compute mean TPR and plot as solid line
+        mean_tpr = np.mean(all_tprs, axis=0)
+        # compute AUC statistics and bold mean curve
+        mean_auc = np.mean(aucs) if aucs else 0
+        std_auc = np.std(aucs) if aucs else 0
+        label = f"{algo} (AUC = {mean_auc:.3f} ± {std_auc:.3f})"
+        plt.plot(fpr_grid, mean_tpr,
+                 color=colors[algo],
+                 lw=3,
+                 label=label)
 
-        plt.plot([0, 1], [0, 1], "k--", lw=1.5)
-        disease_name = disease.replace("_", " ").title()
-        plt.title(f"ROC for {disease_name} - {algo}")
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
+    # diagonal line for reference
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", alpha=0.6, label="Chance")
+    # add grid behind curves
+    plt.grid(alpha=0.3)
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("Comparison of ROC Across Diseases", fontsize=14)
+    # only show legend if there are labelled artists
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
         plt.legend(loc="lower right")
-        plt.grid(alpha=0.4)
-        plt.tight_layout()
-        plt.show()
-
-def create_disease_specific_results(results_df):
-    """
-    Create grouped bar charts to compare algorithm performance across multiple disorders.
-    Only includes 'Overall' folds in the figure.
-    """
-    subset = results_df[results_df["Fold"] == "Overall"]
-    if subset.empty:
-        print("No overall results found for disease-specific comparisons.")
-        return
-
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=subset, x="Disease", y="Test_AUROC", hue="Algorithm")
-    plt.xticks(rotation=45, ha="right")
-    plt.title("Disease-Specific Overall AUROC Comparison")
     plt.tight_layout()
     plt.show()
 
@@ -211,24 +189,12 @@ def main():
     print("Summary Table (Console View):")
     print(summary_table.data.to_string())  # console output
 
-    # export summary table as a tsv
+    # # export summary table as a tsv
     summary_table.data.to_csv("summary_table.tsv", sep="\t", index=False)
 
-    # 1. Summary Table with Visual Elements
-    # (For a Jupyter notebook, you can display 'summary_table' directly.)
-
-    # # 2. Performance comparison
-    # create_performance_comparison(results_df)
-
-    # # 3. Hyperparameter analysis
-    # create_hyperparameter_analysis(results_df)
-
-    # # 4. ROC Visualization
-    # # Overlaid for each disease–algorithm, from the new JSON fold data
-    # create_roc_visualization(fold_data)
-
-    # # 5. Disease-specific results
-    # create_disease_specific_results(results_df)
+    # 3) Plot ROC curves for each algorithm
+    # algorithms = results_df["Algorithm"].unique()
+    #plot_roc_comparison(fold_data, algorithms)
 
 if __name__ == "__main__":
     main()

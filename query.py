@@ -96,25 +96,42 @@ def query_protein_by_alias(conn: sqlite3.Connection, alias: str) -> List[Tuple]:
 
 def query_proteins_by_aliases_batch(conn: sqlite3.Connection, gene_aliases: List[str]) -> Dict[str, List[str]]:
     """
-    Query proteins by multiple gene aliases at once, in chunks to avoid
-    hitting SQLite's variable‐limit.
+    Query proteins by multiple gene aliases. For each alias in gene_aliases, 
+    run a separate query to fetch the associated protein IDs.
     """
     result: Dict[str, List[str]] = {}
     cursor = conn.cursor()
-    chunk_size = 25  # adjust if needed
-    for i in range(0, len(gene_aliases), chunk_size):
-        chunk = gene_aliases[i : i + chunk_size]
-        placeholders = ",".join("?" for _ in chunk)
-        query = f"""
-        SELECT alias, protein_id
-        FROM ProteinAliases
-        WHERE alias IN ({placeholders})
-        """
-        cursor.execute(query, chunk)
-        for alias, protein_id in cursor.fetchall():
+    for alias in gene_aliases:
+        cursor.execute("""
+            SELECT protein_id
+            FROM ProteinAliases
+            WHERE alias = ?
+        """, (alias,))
+        rows = cursor.fetchall()
+        for (protein_id,) in rows:
             result.setdefault(alias, []).append(protein_id)
     return result
 
+#-----------------------------------------------------------------------------------------------------------------------
+
+def query_preferred_name(conn: sqlite3.Connection, protein_id: str) -> str:
+    """
+    Queries the SQLite3 database for the preferred name of a given protein.
+    """
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT p.preferred_name
+    FROM Proteins p
+    WHERE p.protein_id = ?
+    ''', (protein_id,))
+    gene = cursor.fetchone()
+    
+    # Return the preferred name as string
+    if gene is not None:
+        return gene[0]
+    else:
+        return None
+    
 #-----------------------------------------------------------------------------------------------------------------------
 
 def query_interactions_by_score(conn: sqlite3.Connection, min_score: int) -> List[Tuple]:

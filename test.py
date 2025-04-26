@@ -11,7 +11,7 @@ import pandas as pd
 import networkx as nx
 import sqlite3
 from network import create_network, create_network_from_seeds
-from query import query_proteins_by_aliases_batch
+from query import query_proteins_by_aliases_batch, query_preferred_name
 from sklearn.model_selection import StratifiedKFold
 from scipy.interpolate import make_interp_spline
 import matplotlib.pyplot as plt
@@ -106,6 +106,8 @@ def heat_diffusion_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, t_values: l
     G_processed = preprocess_graph(G)
     W_D = row_normalized_adjacency_matrix(G_processed)
     
+    # Store all t values and their AUROCs for each fold
+    t_aucs = {t: [] for t in t_values}
     for i in range(5):
         test_idx = all_folds[i][1]
         val_idx = all_folds[(i+1) % 5][1]
@@ -144,6 +146,9 @@ def heat_diffusion_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, t_values: l
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
                 best_t = t
+
+            # Store the AUROC for this t
+            t_aucs[t].append(val_auc)
         
         best_ts.append(best_t)
         train_val_set = pd.concat([train_set, val_set], ignore_index=True)
@@ -194,7 +199,8 @@ def heat_diffusion_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, t_values: l
         'avg_t': avg_t,
         'fold_results': fold_results,
         'all_fpr': all_fpr,
-        'all_tpr': all_tpr
+        'all_tpr': all_tpr,
+        't_aucs': t_aucs
     }
 
 #-----------------------------------------------------------------------------------------------------------------------
@@ -223,6 +229,8 @@ def random_walk_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, alpha_values: 
     G_processed = preprocess_graph(G)
     W_D = row_normalized_adjacency_matrix(G_processed)
     
+    # Store all alpha values and their AUROCs for each fold
+    alpha_aucs = {alpha: [] for alpha in alpha_values}
     for i in range(5):
         test_idx = all_folds[i][1]
         val_idx = all_folds[(i+1) % 5][1]
@@ -237,6 +245,7 @@ def random_walk_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, alpha_values: 
         
         best_alpha = None
         best_val_auc = -1
+        
         for alpha in alpha_values:
             F0_train = np.zeros(G.number_of_nodes())
             for prot in train_set['Protein'].values:
@@ -260,6 +269,9 @@ def random_walk_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, alpha_values: 
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
                 best_alpha = alpha
+
+            # Store the AUROC for this alpha
+            alpha_aucs[alpha].append(val_auc)
         
         best_alphas.append(best_alpha)
         train_val_set = pd.concat([train_set, val_set], ignore_index=True)
@@ -309,7 +321,8 @@ def random_walk_nested_cv(protein_set: pd.DataFrame, G: nx.Graph, alpha_values: 
         'avg_alpha': avg_alpha,
         'fold_results': fold_results,
         'all_fpr': all_fpr,
-        'all_tpr': all_tpr
+        'all_tpr': all_tpr,
+        'alpha_aucs': alpha_aucs
     }
 
 #-----------------------------------------------------------------------------------------------------------------------
@@ -406,7 +419,6 @@ def run_tests(positive_set: pd.DataFrame, negative_set: pd.DataFrame, G: nx.Grap
           f" # of Positives: {len(positive_set)}"
           f" # of Negatives: {len(negative_set)}"
           f" # of Overlapping Proteins: {len(set(positive_set['Protein']).intersection(set(negative_set['Protein'])))}")
-    
 
     # Ensure all proteins are included in the network
     missing_proteins = set(input_set['Protein'].tolist()) - set(G.nodes())
@@ -414,11 +426,11 @@ def run_tests(positive_set: pd.DataFrame, negative_set: pd.DataFrame, G: nx.Grap
         G.add_nodes_from(missing_proteins)
 
     # Run nested CV tests for Heat Diffusion
-    t_values = [round(x, 1) for x in np.arange(0.5, 4.5, 0.5)]
+    t_values = [round(x, 1) for x in np.arange(0.5, 9.5, 0.5)]
     hd_summary = heat_diffusion_nested_cv(input_set, G, t_values, disease)
 
     # Run nested CV tests for Random Walk
-    alpha_values = [round(x, 2) for x in np.arange(0.5, 0.95, 0.05)]
+    alpha_values = [round(x, 2) for x in np.arange(0.05, 0.95, 0.05)]
     rw_summary = random_walk_nested_cv(input_set, G, alpha_values, disease)
 
     # Combine fold-level results from both algorithms
@@ -451,6 +463,22 @@ def run_tests(positive_set: pd.DataFrame, negative_set: pd.DataFrame, G: nx.Grap
     # Write fold details to JSON files
     write_fold_details_json(hd_summary, disease, "HeatDiffusion")
     write_fold_details_json(rw_summary, disease, "RandomWalk")
+
+    # Export parameter values and AUROC scores
+    t_aucs = hd_summary['t_aucs']
+    alpha_aucs = rw_summary['alpha_aucs']
+
+    # Save t_aucs to a TSV file
+    t_aucs_df = pd.DataFrame.from_dict(t_aucs, orient='index', columns=[f'Fold {i+1}' for i in range(5)])
+    t_aucs_df.index.name = 't'
+    t_aucs_df.reset_index(inplace=True)
+    t_aucs_df.to_csv(f"Results/{disease}_t_aucs.tsv", sep='\t', index=False)
+
+    # Save alpha_aucs to a TSV file
+    alpha_aucs_df = pd.DataFrame.from_dict(alpha_aucs, orient='index', columns=[f'Fold {i+1}' for i in range(5)])
+    alpha_aucs_df.index.name = 'α'
+    alpha_aucs_df.reset_index(inplace=True)
+    alpha_aucs_df.to_csv(f"Results/{disease}_alpha_aucs.tsv", sep='\t', index=False)
 
 #-----------------------------------------------------------------------------------------------------------------------
 
@@ -549,5 +577,127 @@ def main():
     total_time = end_time - start_time
     print(f"All tests completed in {total_time:.2f} seconds.")
 
+#-----------------------------------------------------------------------------------------------------------------------
+
+def top_k_proteins(G: nx.Graph, F0: np.ndarray, F: np.ndarray, k: int) -> List[str]:
+    """
+    Returns the top k proteins based on their scores in F that are not in the input set F0.
+    """
+    node_list = list(G.nodes())
+    # Pair each node with its score, excluding any node where F0 is non-zero
+    candidates = [(node_list[i], F[i]) for i in range(len(node_list)) if F0[i] == 0]
+
+    # Sort by descending score
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # Take top k node names
+    return [node for node, _ in candidates[:k]]
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def gene_test(G: nx.Graph, input_file: str, disease: str, file_type: str, opt_t: float, opt_alpha: float) -> dict:
+    """
+    Load the disease and negative sets from file and run the tests.
+    """
+    # Load the disease set using appropriate loader based on file type
+    if file_type == 'omim':
+        input_set = load_omim_set(input_file)
+    elif file_type == 'disgenet':
+        input_set = load_disgenet_set(input_file)
+    else:
+        raise ValueError(f"Unsupported file type for positive set: {input_file}")
+    
+    # Run network propagation algorithms with optimized parameters
+    G_processed = preprocess_graph(G)
+    W_D = row_normalized_adjacency_matrix(G_processed)
+    
+    # Create F0 vector
+    F0 = np.zeros(G.number_of_nodes(), dtype=np.float32)
+    for protein in input_set['Protein'].values:
+        if protein in G.nodes():
+            idx = list(G.nodes()).index(protein)
+            F0[idx] = 1.0
+
+    # Run the algorithms
+    hd_results = heat_diffusion(W_D, F0, opt_t)
+    rw_results = random_walk(W_D, F0, opt_alpha)
+
+    # Rank the top-20 proteins that weren't in input set
+    ranked_hd = top_k_proteins(G, F0, hd_results, 20)
+    ranked_rw = top_k_proteins(G, F0, rw_results, 20)
+
+    # Map ranked proteins to their preferred names using the query_preferred_name function
+    conn = sqlite3.connect('Data/SQLite_DB/genomics.db')
+    ranked_hd = [query_preferred_name(conn, prot) for prot in ranked_hd]
+    ranked_rw = [query_preferred_name(conn, prot) for prot in ranked_rw]
+    conn.close()
+
+    # Add the result to the disease summaries
+    disease_summary = {
+        'Disease': disease,
+        'Top_20_HD': ranked_hd,
+        'Top_20_RW': ranked_rw,
+    }
+
+    return disease_summary
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+def predict_genes():
+    G = create_network(min_score=400)
+
+    # Create a list of diseases and their corresponding files
+    diseases = [
+        ('epilepsy', 'Data/OMIM/Processed/epilepsy_genes.txt', 'omim'),
+        ('diabetes', 'Data/OMIM/Processed/diabetes_genes.txt', 'omim'),
+        ('alcohol_use_disorder', 'Data/DisGeNET/alcoholism.tsv', 'disgenet'),
+        ('cocaine_use_disorder', 'Data/DisGeNET/cocaine.tsv', 'disgenet'),
+        ('tobacco_use_disorder', 'Data/DisGeNET/tobacco.tsv', 'disgenet'),
+        ('depression', 'Data/DisGeNET/depression.tsv', 'disgenet'),
+        ('attention_deficit_disorder', 'Data/DisGeNET/adhd.tsv', 'disgenet'),
+        ('anxiety', 'Data/DisGeNET/anxiety.tsv', 'disgenet'),
+        ('schizophrenia', 'Data/DisGeNET/schizophrenia.tsv', 'disgenet'),
+        ('bipolar_disorder', 'Data/DisGeNET/bipolar.tsv', 'disgenet')
+    ]
+
+    # Create a predictions file
+    predictions_file = 'predictions.txt'
+    predictions_df = pd.DataFrame(columns=['Disease', 'Top_20_HD', 'Top_20_RW'])
+
+    for disease, input_file, file_type in diseases:
+        results = gene_test(G, input_file, disease, file_type, opt_t=2.3, opt_alpha=0.50)
+        # Concat the results to the predictions dataframe
+        predictions_df = pd.concat([predictions_df, pd.DataFrame([results])], ignore_index=True)
+        with open(predictions_file, 'a') as f:
+            f.write(f"Disease: {disease}\n")
+            f.write("Top 20 Genes (Heat Diffusion):\n")
+            for gene in results['Top_20_HD']:
+                f.write(f"{gene}\n")
+            f.write("Top 20 Genes (Random Walk):\n")
+            for gene in results['Top_20_RW']:
+                f.write(f"{gene}\n")
+            f.write("\n")
+
+    # Expand the top‐20 lists into 20 rows per disease
+    predictions_df = predictions_df.explode(['Top_20_HD', 'Top_20_RW'])
+    # Rename columns and keep only the desired ones
+    predictions_df = (
+        predictions_df
+          .rename(columns={'Top_20_HD':'HeatDiffusion','Top_20_RW':'RandomWalk'})
+          [['Disease','HeatDiffusion','RandomWalk']]
+    )
+
+    predictions_df["Rank"] = predictions_df.groupby(["Disease"]).cumcount()+1
+    wide = (predictions_df.pivot_table(index=["Disease","Rank"],
+                       values=["HeatDiffusion","RandomWalk"],
+                       aggfunc="first")
+          .reset_index())
+    # (Optional) save to disk
+    wide.to_csv('predictions.tsv', sep='\t', index=False)
+
+    # Save another where only the top 5 genes for each disease are shown
+    top_5 = predictions_df[predictions_df['Rank'] <= 5]
+    top_5.to_csv('top_5_predictions.tsv', sep='\t', index=False)
+
 if __name__ == '__main__':
-    main()
+    predict_genes()
